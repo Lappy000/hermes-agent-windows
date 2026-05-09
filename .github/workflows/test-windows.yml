@@ -38,6 +38,7 @@ jobs:
             --ignore=tests/gateway/ `
             --ignore=tests/integration/ `
             --ignore=tests/acp/ `
+            --ignore=tests/acp_adapter/ `
             -n auto
 
       - name: Run unit tests (tools - non-terminal)
