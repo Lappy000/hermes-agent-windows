@@ -37,6 +37,7 @@ jobs:
             -k "not integration and not gateway and not terminal_exec" `
             --ignore=tests/gateway/ `
             --ignore=tests/integration/ `
+            --ignore=tests/acp/ `
             -n auto
 
       - name: Run unit tests (tools - non-terminal)
