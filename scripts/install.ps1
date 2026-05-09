@@ -100,10 +100,11 @@ if (Test-Path $HermesAgent) {
 } else {
     Write-Step "Cloning Hermes Agent..."
     New-Item -ItemType Directory -Force -Path $HermesHome | Out-Null
-    & git clone --branch $Branch --depth 1 `
-        "https://github.com/NousResearch/hermes-agent.git" $HermesAgent 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    $cloneOutput = & git clone --branch $Branch --depth 1 `
+        "https://github.com/Lappy000/hermes-agent.git" $HermesAgent 2>&1
+    if (-not (Test-Path "$HermesAgent\pyproject.toml")) {
         Write-Err "Failed to clone repository"
+        Write-Host "    $cloneOutput" -ForegroundColor Gray
         exit 1
     }
     Write-Ok "Cloned hermes-agent ($Branch)"
