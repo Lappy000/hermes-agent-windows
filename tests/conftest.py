@@ -557,3 +557,29 @@ def _reset_tool_registry_caches():
     except ImportError:
         pass
     yield
+
+
+# ---------------------------------------------------------------------------
+# Windows: auto-skip test files that import Unix-only modules
+# ---------------------------------------------------------------------------
+if sys.platform == "win32":
+    _UNIX_ONLY_MODULES = ("pwd", "grp", "termios", "fcntl", "resource")
+
+    def pytest_collect_file(parent, file_path):
+        """Prevent collection of test files importing Unix-only modules on Windows.
+
+        When pytest tries to import a test file that does `import pwd` at module
+        level, it crashes with ModuleNotFoundError before any -k filters apply.
+        This hook reads the source and returns a custom empty Module that yields
+        no tests, effectively skipping the file.
+        """
+        if file_path.suffix == ".py" and file_path.name.startswith("test_"):
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+                for mod in _UNIX_ONLY_MODULES:
+                    # Match 'import pwd' or 'from pwd import ...' at line start
+                    if f"\nimport {mod}" in content or f"\nfrom {mod}" in content or content.startswith(f"import {mod}"):
+                        return None  # tell pytest to skip this file
+            except Exception:
+                pass
+        return None  # default — let pytest handle normally

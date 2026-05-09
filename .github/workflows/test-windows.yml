@@ -34,12 +34,13 @@ jobs:
         shell: pwsh
         run: |
           pytest tests/ -x -q --timeout=60 `
-            -k "not integration and not gateway and not terminal_exec and not gateway_service" `
+            -k "not integration and not gateway and not terminal_exec" `
             --ignore=tests/gateway/ `
             --ignore=tests/integration/ `
             --ignore=tests/acp/ `
             --ignore=tests/acp_adapter/ `
             --ignore=tests/e2e/ `
+            --ignore=tests/hermes_cli/test_gateway_service.py `
             -n auto
 
       - name: Run unit tests (tools - non-terminal)
