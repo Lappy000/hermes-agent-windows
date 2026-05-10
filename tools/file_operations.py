@@ -619,19 +619,15 @@ class ShellFileOperations(FileOperations):
         """
         Read a file with pagination, binary detection, and line numbers.
         
-        Args:
-            path: File path (absolute or relative to cwd)
-            offset: Line number to start from (1-indexed, default 1)
-            limit: Maximum lines to return (default 500, max 2000)
-        
-        Returns:
-            ReadResult with content, metadata, or error info
+        On Windows with local backend, uses Python native I/O.
         """
-        # Expand ~ and other shell paths
         path = self._expand_path(path)
-        
         offset, limit = normalize_read_pagination(offset, limit)
-        
+
+        # On Windows local backend, use native Python I/O
+        if os.name == 'nt' and self._is_local_backend():
+            return self._read_file_native(path, offset, limit)
+
         # Check if file exists and get size (wc -c is POSIX, works on Linux + macOS)
         stat_cmd = f"wc -c < {self._escape_shell_arg(path)} 2>/dev/null"
         stat_result = self._exec(stat_cmd)
@@ -824,23 +820,9 @@ class ShellFileOperations(FileOperations):
         """
         Write content to a file, creating parent directories as needed.
 
-        Pipes content through stdin to avoid OS ARG_MAX limits on large
-        files. The content never appears in the shell command string —
-        only the file path does.
-
-        After the write, runs a post-first / pre-lazy lint check via
-        ``_check_lint_delta()``.  If the new content is clean, the lint
-        call is O(one parse).  If the new content has errors, the pre-write
-        content is linted too and only errors newly introduced by this
-        write are surfaced — pre-existing problems are filtered out so
-        the agent isn't distracted chasing them.
-
-        Args:
-            path: File path to write
-            content: Content to write
-
-        Returns:
-            WriteResult with bytes written, lint summary, or error.
+        On Windows with local backend, uses Python native I/O to avoid
+        bash-isms (cat >, mkdir -p) that don't work in PowerShell.
+        On Unix or remote backends, pipes content through stdin.
         """
         # Expand ~ and other shell paths
         path = self._expand_path(path)
@@ -848,6 +830,10 @@ class ShellFileOperations(FileOperations):
         # Block writes to sensitive paths
         if _is_write_denied(path):
             return WriteResult(error=f"Write denied: '{path}' is a protected system/credential file.")
+
+        # On Windows local backend, use native Python I/O
+        if os.name == 'nt' and self._is_local_backend():
+            return self._write_file_native(path, content)
 
         # Capture pre-write content for lint-delta computation.  Only do this
         # when an in-process OR shell linter exists for this extension — no
@@ -901,6 +887,102 @@ class ShellFileOperations(FileOperations):
             bytes_written=bytes_written,
             dirs_created=dirs_created,
             lint=lint_result.to_dict() if lint_result else None,
+        )
+
+    def _is_local_backend(self) -> bool:
+        """Check if we're using a local terminal backend (not docker/ssh/modal)."""
+        env_cls = type(self.env).__name__
+        return env_cls in ('LocalEnvironment', 'LocalTerminalSession')
+
+    def _write_file_native(self, path: str, content: str) -> WriteResult:
+        """Write file using Python native I/O (Windows-safe)."""
+        # Capture pre-write content for lint
+        ext = os.path.splitext(path)[1].lower()
+        pre_content: Optional[str] = None
+        if ext in LINTERS_INPROC:
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    pre_content = f.read()
+            except (OSError, FileNotFoundError):
+                pass
+
+        # Create parent directories
+        parent = os.path.dirname(path)
+        dirs_created = False
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+                dirs_created = True
+            except OSError as e:
+                return WriteResult(error=f"Failed to create directory '{parent}': {e}")
+
+        # Write the file
+        try:
+            with open(path, 'w', encoding='utf-8', newline='') as f:
+                f.write(content)
+        except OSError as e:
+            return WriteResult(error=f"Failed to write file '{path}': {e}")
+
+        bytes_written = len(content.encode('utf-8'))
+
+        # Post-write lint
+        lint_result = self._check_lint_delta(path, pre_content=pre_content, post_content=content)
+
+        return WriteResult(
+            bytes_written=bytes_written,
+            dirs_created=dirs_created,
+            lint=lint_result.to_dict() if lint_result else None,
+        )
+
+    def _read_file_native(self, path: str, offset: int, limit: int) -> ReadResult:
+        """Read file using Python native I/O (Windows-safe)."""
+        if not os.path.exists(path):
+            return self._suggest_similar_files(path)
+
+        file_size = os.path.getsize(path)
+
+        if self._is_image(path):
+            return ReadResult(
+                is_image=True, is_binary=True, file_size=file_size,
+                hint="Image file detected. Use vision_analyze with this file path."
+            )
+
+        # Check for binary
+        try:
+            with open(path, 'rb') as f:
+                sample = f.read(1000)
+            if b'\x00' in sample:
+                return ReadResult(
+                    is_binary=True, file_size=file_size,
+                    error="Binary file - cannot display as text."
+                )
+        except OSError as e:
+            return ReadResult(error=f"Failed to read file: {e}")
+
+        # Read as text with pagination
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                all_lines = f.readlines()
+        except OSError as e:
+            return ReadResult(error=f"Failed to read file: {e}")
+
+        total_lines = len(all_lines)
+        end_line = offset + limit - 1
+        selected_lines = all_lines[offset - 1:end_line]
+        content = ''.join(selected_lines)
+        numbered = self._add_line_numbers(content, offset)
+
+        truncated = total_lines > end_line
+        hint = None
+        if truncated:
+            hint = f"Use offset={end_line + 1} to continue reading (showing {offset}-{end_line} of {total_lines} lines)"
+
+        return ReadResult(
+            content=numbered,
+            total_lines=total_lines,
+            file_size=file_size,
+            truncated=truncated,
+            hint=hint
         )
     
     # =========================================================================
