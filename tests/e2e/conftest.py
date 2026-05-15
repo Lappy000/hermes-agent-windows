@@ -324,11 +324,20 @@ def make_fake_guild(guild_id: int = GUILD_ID, name: str = "Test Server"):
     return SimpleNamespace(id=guild_id, name=name)
 
 
+def _make_async_history():
+    """Return an async generator factory that yields nothing (empty history)."""
+    async def _history(**kwargs):
+        return
+        yield  # noqa: RET504 -- makes this an async generator
+    return _history
+
+
 def make_fake_text_channel(channel_id: int = CHANNEL_ID, name: str = "general", guild=None):
     return SimpleNamespace(
         id=channel_id, name=name,
         guild=guild or make_fake_guild(),
         topic=None, type=0,
+        history=_make_async_history(),
     )
 
 
